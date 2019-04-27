@@ -1,0 +1,21 @@
+Package: trySignRestrictions
+Type: Package
+Title: 
+Version: 0.1.0
+Author: Who wrote it
+Maintainer: The package maintainer <yourself@somewhere.net>
+Description: The package illustrates an application of the traditional approach to SVAR identification
+    using sign restrictions. It is based on the example from Baumeister and Hamilton (2015).
+    Use four spaces when indenting paragraphs within the Description.
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true
+Suggests: 
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+RoxygenNote: 6.1.1
+Imports: 
+    R.matlab,
+    mvnfast,
+    purrr
