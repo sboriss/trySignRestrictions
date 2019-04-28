@@ -1,0 +1,276 @@
+---
+title: "trySignRestrictions"
+author: "Vignette Author"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+# knitr::opts_chunk$set(
+#   collapse = TRUE,
+#   comment = "#>"
+# )
+```
+
+## Introduction
+This vignette intends to go through the application of traditional sign restrictions methodology to the labour market data. This data set was used to illustrate the shortcomings of this approach to shock identification in the Structural Vector AutoRegressions (SVAR) in Baumeister and Hamilton (2015). The data comprises wage and employment growth in the US for the period from 1970Q1 until 2014Q2. 
+
+All the commands and data are stored in the package **trySignRestrictions**.
+
+```{r library}
+library(Matrix)
+library(mvnfast) # use rvn: generate multivariate normal variates
+library(grid)
+library(gridExtra)
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(magrittr))
+suppressPackageStartupMessages(library(tibbletime))
+library(trySignRestrictions)
+
+set.seed( 17 )
+```
+
+## Data
+The labour market data set is pre-installed in the package and it can be called into R session as follows:
+```{r data}
+# load data from the package
+data(dataLabourMarket); dataLabourMarket
+```
+It contains wage and employment time series in levels as well as their transformations to quarterly growth rates and their lagged values up to the 8th order. The data set was downloaded from the original MATLAB file that can be found at the Baumeister webpage. Below we present the auxiliary code used for data download and transformation for the sake of the reference.
+
+```{r data_source}
+if(FALSE){
+### path to folder with the course materials 
+#path <- "D:/backup/LNB/CBAUMEISTER/BVARCOURSE2018/replication_codes/"
+path <- "C:/BBB/CBAUMEISTER/BVARCOURSE2018/replication_codes/" #  
+  
+    funcLags <- function( var, n = 1, fmt = "%s_L%02d"){
+    ### from https://purrple.cat/blog/2018/03/02/multiple-lags-with-tidy-evaluation/
+    ### n multiple lags of one variable var
+      var <- enquo(var)
+    
+      indices <- seq_len(n)
+      map( indices, ~quo(lag(!!var, !!.x)) ) %>%
+          set_names( sprintf( fmt, rlang::quo_text( var ), indices ) )
+    }
+    
+    dataLabourMarket = R.matlab::readMat( paste0( path, "application3/","labor_data.mat") )$data %>%
+              data.frame %>%
+              set_names( c( "w", "n") ) %>%
+              mutate( date = seq( as.Date("1947-03-01"), length.out = n(), by = "3 months") ) %>%
+              mutate( const = 1 ) %>%
+              mutate_at( .vars = c( "w", "n"), .funs = funs( DLn = ( log( . ) - lag( log( . ), n = 1 ) ) * 100 ) ) %>%
+              as_tbl_time( index = date ) %>%
+              mutate( !!!funcLags( w_DLn, n = 8, fmt = "%s_L%1d" ) ) %>%
+              mutate( !!!funcLags( n_DLn, n = 8, fmt = "%s_L%1d" ) ) %>% na.omit
+    
+}
+```
+
+
+## Sign restrictions for shock identification
+
+The sought sign restriction for shock identification correspond to two shocks labelled as labour supply and labour demand shocks. The former shock exerts an opposite effects on the modelled variables, i.e. it boosts employment but supresses wages. The latter shock moves both the variables in the same direction, i.e. a positive labour demand shock increases both employment and wages.
+```{r signRestrictions}
+### set sign restrictions
+mSignRestriction <- c( "+", "-", "+", "+" ) %>% matrix( nrow = sqrt( length(.) ), byrow = FALSE ) 
+mSignRestriction %>% 
+  set_rownames( c( "Wage","Employment" ) ) %>% 
+  set_colnames( c( "Supply shock", "Demand shock" ) )
+```
+
+## Set options
+
+Set the following optional arguments:
+
+```{r opt}
+opt                <- list()
+opt$p              <- 8 # VAR(p)
+opt$asy            <- c( "w_DLn", "n_DLn" )
+opt$asx            <- paste0( opt$asy, "_L", rep( seq_len( opt$p ),each = length(opt$asy) ) )
+opt$stepIRF        <- 0:16    ### set length of IRF
+opt$numIRFunsigned <- 10    ### number of unsigned IRF proposals to generate
+```
+
+
+## VAR(8): Estimation
+
+Estimate the reduced form VAR(8) using sample 1970Q1---2014Q2.
+```{r RFVAR}
+### set sample 
+dateBeg <- '1970-03-01'
+dateEnd <- '2014-06-01'
+
+### estimate reduced-form VAR
+listVARestm <- estimateVAR( dataLabourMarket, opt$asy, opt$asx, dateBeg, dateEnd )
+
+### covariance of residual matrix
+mSigma <- listVARestm$mSigma
+mSigma
+
+### create companion matrix
+mComp <- listVARestm$mVARcoefComp
+mComp %>% tbl_df
+```
+
+The companion matrix is used to generate IRFs at the specified horizon $h=0,...,h_{\max}$.
+
+## IRFs without any sign restrictions
+
+Before turning to the imposing sign restrictions on the IRFs it is instructive to take a look at the IRFs without sign restrictions imposed. That is we retain all IRF generated using the algorithm of Rubio-Ramirez, Waggoner and Zha (2010).
+
+```{r IRFunsigned, fig.width=8, fig.height=12}
+
+### get opt$keepIRF draws of IRF and IRFC
+listIRFunsigned <- vector( "list", opt$numIRFunsigned )
+for( i in seq( opt$numIRFunsigned) ){
+  
+  listIRFunsigned[[ i ]] <- getIRFunsigned( mComp, mSigma, opt$stepIRF )
+
+}
+
+### cumulate unrestricted IRF
+listIRFCunsigned <- listIRFunsigned %>% map( ~  apply( .x, 2, cumsum ) )
+
+### convert either IRF or IRFC from list to data.frame
+dfIRF  <- convertListToDataFrame( listIRFunsigned )
+dfIRFC <- convertListToDataFrame( listIRFCunsigned )
+
+### UNSIGNED IRF: prepare IRF(C) for plots
+list2pltUnsigned <- list( IRF = dfIRF, IRFC = dfIRFC ) 
+
+list2plt_IRF_IRFC_UNSIGNED <- names( list2pltUnsigned ) %>% 
+  map(  ~ list2pltUnsigned[[ .x ]] %>% 
+          gather( keyValue, value, starts_with("value") ) %>% 
+          ggplot( aes( x = h, y = value, group = keyValue) ) +
+          geom_line( col = " darkgray"  ) +
+          facet_wrap( ~ key, scales = "free" ) +
+          ggtitle( paste( "facet_wrap:",.x ) ) )
+
+do.call( grid.arrange, list2plt_IRF_IRFC_UNSIGNED  )
+
+```
+
+The distribution of impact at $h = 0$ is shown below. As discussed in Baumeister and Hamilton (2015) the density should and it indeed has a U-shape given that there are two modelled variables, i.e. n = 2.
+
+```{r IRFunsigned_h0, fig.width=8, fig.height=8}
+dfIRF %>% filter( h == "h=0") %>% 
+  gather( keyValue, value, starts_with( "value" ) ) %>% 
+  ggplot( aes( x = value ) ) +
+  geom_histogram() +
+  facet_wrap( ~ key, scales = "free" )
+```
+
+## Impose sign restrictions
+
+The Rubio-Ramirez, Waggoner and Zha (2010) algrithm uses the mapping between the residuals of reduced-form VAR $\varepsilon_t$ and structural shocks $v_t$ characterised by the multivariate standard normal distribution, $N(0_n, I_{n\times n})$
+
+$$ 
+\varepsilon_t = H v_t.
+$$
+The matrix $H$ represents the contamporaneous response of the modelled variables $y_t$ to structural shocks $v_t$ in the reduced-form VAR. 
+
+Rubio-Ramirez, Waggoner and Zha (2010) propose to use the QR algorithm for generating candidate draws of $H$ in the hope that at least some of those will comply with the sign restrictions in question. Their algorithm contains the following steps:
+
+- Compute the Cholesky decomposition of the covariance matrix of reduced-form residuals $\Sigma$
+
+$$\Sigma = PP'$$
+- Generate a $n \times n$ matrix of independent N(0,1) random variables $X$
+
+- Apply the QR decomposition to the matrix $X = QR$, where $Q$ is an orthogonal matrix and $R$ is upper triangular.
+
+- Compute the candidate draw 
+
+$$H = PQ.$$
+
+Observe that by construction 
+
+$$\Sigma = HH' = PQQ'P'$$ 
+since the matrix $Q$ is orthogonal.
+
+### One example of candidate $H$
+
+For example,
+
+```{r Hcandidate}
+### number of variables
+n <- 2
+
+### covariance matrix of the reduced-form residuals
+mSigma
+
+### its Cholesky decomposition matrix P (lower triangular)
+mP <- mSigma %>% chol %>% t; mP
+
+### matrix of standard normal variates X
+mX <- rmvn( n, rep(0,2), diag( n ) ); mX
+
+### apply the QR decomposition
+mQR <- qr( mX );
+
+mQ <- qr.Q( mQR ); # cat('OLD: Q\n'); Q
+mR <- qr.R( mQR ); # cat( 'R\n' ); R
+
+### flip sign of columns where R[i,i] < 0: don't see why?
+mQ <- diag( mR ) %>% sign %>% diag %>% `%*%`( mQ, . );# cat('NEW: Q\n'); Q
+
+mH <- mP %*% mQ; cat('mH\n'); mH %>% round( digits = 3)
+
+```
+
+In this example a supply shock can be attributed to the *first* column as it raises wage ($h_{11} > 0$) and lowers employment ($h_{21} < 0$) whereas a demand shock can be attributed to the *second* column as it raises both wage ($h_{21} > 0$) and employment ($h_{22} > 0$).  
+
+### Another example of candidate $H$
+
+Suppose that we get another candidate $H$ in the following form
+```{r}
+mH <- c( 0.2214489, -0.73915056, 0.3135868, 0.06000359 ) %>% 
+      matrix( nrow = 2, byrow = TRUE) %>% 
+      set_rownames( c("w_DLn", "n_DLn") )
+mH
+```
+The question is how can we transform it to comply with the sign restrictions that we want to impose?
+```{r}
+mSignRestriction 
+```
+That's it, 
+
+1) the supply and demand shocks should be ordered to the first and the second columns respectively; 
+
+2) the sign of the matrix elements in the first row should be positive.
+
+First, we check whether we can recover the covariance matrix $\Sigma$ from that candidate draw?:
+```{r}
+mH %*% t( mH ) %>% round( digits = 6 ) 
+mSigma %>% round( digits = 6) 
+identical( mH %*% t( mH ) %>% round( digits = 6 ), mSigma %>% round( digits = 6) )
+```
+
+Ordering of the shocks to the representation we desire can be achieved by two matrix manipulations:
+
+- column swapping
+- column sign flipping
+
+To see how it is done:
+
+```{r}
+### impose positive entries in the first row
+mH <- sign( mH[ 1, ] ) %>% diag %>% `%*%`( mH, . ); 
+mH
+
+### swap columns by means of a permutation matrix
+pm <- as( as.integer( c( 2, 1 ) ), "pMatrix" ) # library(Matrix)
+mH <- mH %*% pm
+mH
+```
+The resulting matrix $H$ has the required ordering and normalisation of the shocks. The $\Sigma$ matrix can be recovered as well:
+```{r}
+mH %*% t( mH ) %>% round( digits = 6 ) 
+mSigma %>% round( digits = 6) 
+identical( mH %*% t( mH ) %>% round( digits = 6 ), mSigma %>% round( digits = 6) )
+```
+
