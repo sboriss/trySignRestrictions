@@ -17,5 +17,6 @@
 #usethis::use_package("R.matlab")
 #usethis::use_package("mvnfast")
 #usethis::use_package("purrr")
-usethis::use_package("purrr")
+#usethis::use_package("purrr")
+#usethis::use_mit_license("Boriss")
 #prompt( dataLabourMarket ) # creates help page for dataset: not possible with roxygen2
