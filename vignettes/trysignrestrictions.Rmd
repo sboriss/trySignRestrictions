@@ -201,6 +201,8 @@ Observe that by construction
 $$\Sigma = HH' = PQQ'P'$$ 
 since the matrix $Q$ is orthogonal.
 
+- Do it $N$ times. For each candidate check whether it complies with the sign restrictions of interest. Keep those that does and discard those that do not.
+
 ### One example of candidate $H$
 
 For example,
@@ -283,3 +285,84 @@ mSigma %>% round( digits = 6)
 identical( mH %*% t( mH ) %>% round( digits = 6 ), mSigma %>% round( digits = 6) )
 ```
 
+### Bad matrix 
+
+There are cases when a candidate H does not allow sign identification. For example, in this matrix both shocks
+```{r}
+#            [,1]        [,2]
+# w_DLn 0.0171282 -0.77142064
+# n_DLn 0.3182592 -0.02546026
+```
+move both variables in the same direction. Neither column swapping nor column sign flipping will result in the desired patterb of sign restrictions.
+
+## Signed IRFs
+
+```{r, fig.width=8, fig.height=12}
+### impose Sign Restrictions whenever possible (DIRTY version that includes failed cases)
+listIRFsigned_DIRTY  <- listIRFunsigned %>% map( ~ orderShocksInIRFprop( .x ) ) 
+listIRFdiscard       <- listIRFsigned_DIRTY %>% map_lgl( is.null )
+
+listIRFsigned_CLEAN  <- listIRFsigned_DIRTY %>% discard( listIRFdiscard )
+
+
+cat( "\n*** Out of initial", opt$numIRFunsigned,"IRF proposals", length(listIRFsigned_CLEAN),"comply with sign restrictions" )
+
+### cumulate IRF
+listIRFCsigned_CLEAN <- listIRFsigned_CLEAN %>% 
+                        map( ~ apply( .x, 2, cumsum ) )
+
+dfIRFsigned  <- convertListToDataFrame( listIRFsigned_CLEAN )  
+dfIRFCsigned <- convertListToDataFrame( listIRFCsigned_CLEAN ) 
+
+### SIGNED IRF
+### prepare for IRF(C) for plots
+list2pltSigned <- list( IRF = dfIRFsigned, IRFC = dfIRFCsigned ) 
+
+list2plt_IRF_IRFC_SIGNED <- names( list2pltSigned ) %>% 
+  map(  ~ list2pltSigned[[ .x ]] %>% 
+          gather( keyValue, value, starts_with("value") ) %>% 
+          ggplot( aes( x = h, y = value, group = keyValue) ) +
+          geom_line( col = " darkgray"  ) +
+          facet_wrap( ~ key, scales = "free" ) +
+          ggtitle( paste( "facet_wrap:",.x ) ) )
+
+do.call( grid.arrange, list2plt_IRF_IRFC_SIGNED  )
+
+``` 
+
+## Compute impact matrix elasticities
+
+```{r impackSigned, fig.width=7, fig.height=4}
+ImpactSigned <- dfIRFsigned %>% filter( h == 'h=0' ) %>% 
+                                mutate( key = str_replace( key, "Y1to", "WageTo") ) %>% 
+                                mutate( key = str_replace( key, "Y2to", "EmplTo") )
+
+### extract names with "value" string
+valueAll <- colnames( ImpactSigned ) %>% str_detect( "value" ) %>% colnames( ImpactSigned )[ . ]
+
+# ImpactSigned[[1]]
+
+### add Wage demand/supply elasticities 
+ImpactSignedWageElast <- valueAll %>% map_df( function(x){
+  
+    ImpactSigned %>% select( key, h, x ) %>% 
+                     spread( key, x ) %>% 
+                     mutate( WageDemandElast = respEmplToDemandShock / respWageToDemandShock ) %>% 
+                     mutate( WageSupplyElast = respEmplToSupplyShock / respWageToSupplyShock )  
+  
+} )
+
+### bounds on wage elasticities
+ImpactSignedWageElast %>% select( WageDemandElast, WageSupplyElast ) %>% 
+                          gather() %>% 
+                          group_by( key ) %>% 
+                          summarise( min = min(value), max = max(value) )
+
+
+### make histogram of wage elasticities
+ImpactSignedWageElast %>% select( WageDemandElast, WageSupplyElast ) %>% gather() %>% 
+  filter( value > -5 ) %>% 
+  ggplot( aes( x = value ) ) +  
+  geom_histogram( ) +
+  facet_wrap( ~ key, scales = "free" )
+```
